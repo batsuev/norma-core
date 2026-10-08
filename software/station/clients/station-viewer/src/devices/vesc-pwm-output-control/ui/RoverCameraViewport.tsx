@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import Long from 'long';
-import { Maximize2, Minimize2 } from 'lucide-react';
+import { Eye, EyeOff, Maximize2, Minimize2 } from 'lucide-react';
 import { serverToLocal } from '@/api/timestamp-utils';
 import { commandManager } from '@/api/commands';
 import type { FrameEntry } from '@/api/frame-parser';
@@ -76,6 +76,7 @@ export default function RoverCameraViewport({ source, motion, now, isFullscreen,
   const [selected, setSelected] = useState('auto');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [videoHidden, setVideoHidden] = useState(false);
   useEffect(() => {
     setSelected(sourceId && isLiveCameraSuppressed(sourceId) ? 'none' : 'auto');
     setError('');
@@ -106,19 +107,26 @@ export default function RoverCameraViewport({ source, motion, now, isFullscreen,
     finally { setBusy(false); }
   }
   return <section className="rover-video" aria-label="Selected camera view" style={{ '--camera-aspect': aspect } as CSSProperties}>
-    {selected === 'none' ? <div className="rover-camera-empty">Camera off</div> : sourceId ? <CameraViewer sourceId={sourceId} fit="contain" overlay="none" className="rover-camera-image" /> : <div className="rover-camera-empty">Waiting for camera</div>}
+    {selected === 'none' ? <div className="rover-camera-empty">Camera off</div>
+      : videoHidden ? <div className="rover-camera-empty">Video hidden · stream continues</div>
+        : sourceId ? <CameraViewer sourceId={sourceId} fit="contain" overlay="none" className="rover-camera-image" />
+          : <div className="rover-camera-empty">Waiting for camera</div>}
     <RoverMotionHud motion={motion} />
     <div className="rover-video-tools">
+      <button type="button" aria-label={videoHidden ? 'Show video display' : 'Hide video display'} aria-pressed={videoHidden}
+        title={videoHidden ? 'Show video display' : 'Hide display (keep streaming)'} disabled={!sourceId || selected === 'none'} onClick={() => setVideoHidden(hidden => !hidden)}>
+        {videoHidden ? <EyeOff size={16} /> : <Eye size={16} />}
+      </button>
       {cameraId && <select key={cameraId} aria-label="Camera format" title={format ? formatLabel(format) : 'Camera format'} value={selected} disabled={disabled || busy} onChange={event => void changeFormat(event.target.value)}>
         <option value="auto">Auto{dimensions ? ` · ${dimensions.width} × ${dimensions.height}` : ''}</option>
-        <option value="none">Off</option>
+        <option value="none">Stop stream</option>
         {formats.map(({ key, format: f }) => <option key={key} value={key}>{formatLabel(f)}</option>)}
       </select>}
       <button type="button" onClick={() => { onBeforeChange(); onToggleFullscreen(); }} aria-label={isFullscreen ? 'Exit fullscreen rover control' : 'Fullscreen rover control'}>
         {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
       </button>
     </div>
-    {videoStale && <div className="rover-video-status" role="status">Video stale</div>}
+    {videoStale && !videoHidden && <div className="rover-video-status" role="status">Video stale</div>}
     {error && <div className="rover-video-error" role="alert">{error}</div>}
   </section>;
 }

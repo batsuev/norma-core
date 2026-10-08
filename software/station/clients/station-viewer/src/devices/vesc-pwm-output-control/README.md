@@ -11,6 +11,8 @@ The Cockpit layout replaces the old VESC/PWM dashboard. It retains Station's sha
 
 ## Live acquisition
 
+- The eye button hides or shows the local video display. Hiding unmounts the cockpit viewer and pauses its frame fetching; showing it resumes fetching. No camera command is sent, so capture and streaming on the rover continue. A frame request already in flight may still finish. Camera format selection is independent; **Stop stream** explicitly stops capture.
+
 `api/live-queue-policy.ts` recognizes a VESC + PWM station from the inference index before reading any payloads. It reads only one VESC inference queue, one USB camera queue, one Nicla Sense ME RX queue and one Victron SmartSolar RX queue. If a type has multiple queues, the first queue name in lexical order is selected consistently. This view currently has no camera/IMU source picker.
 
 Victron reads are limited to 1 Hz. VESC/Nicla reads are coalesced to at most 10 Hz before network I/O. Video follows the selected stream, with no reads while switched Off. Unread sample pointers are not promoted into the payload cache. The inference index itself is still polled at 50 Hz. Queue descriptors are already in that index and identify PWM support without payload reads. PWM commands are sent independently; this view does not monitor PWM status or driver errors. There are no diagnostic subscriptions: raw VESC RX/TX, PWM RX/TX, USB TX, additional Victron devices, system, environment, thermal and other unused payloads are not fetched by this mode. History bypasses this live policy and can inspect all recorded queues; non-rover stations retain the existing acquisition behavior.
