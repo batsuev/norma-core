@@ -55,9 +55,15 @@ impl USBCameraDriver for CameraLinuxDriver {
             let _ = stop_tx.send(());
             log::info!("Stop signal sent to all active camera streams");
 
-            // Wait for all streams to stop
-            while active_streams.load(Ordering::Acquire) > 0 {
-                all_stopped_notify.notified().await;
+            // Registered before the count is read, or a notify in between is lost.
+            loop {
+                let stopped = all_stopped_notify.notified();
+                tokio::pin!(stopped);
+                stopped.as_mut().enable();
+                if active_streams.load(Ordering::Acquire) == 0 {
+                    break;
+                }
+                stopped.await;
             }
             log::info!("All camera streams have stopped");
         }
@@ -183,7 +189,7 @@ impl USBCameraDriver for CameraLinuxDriver {
                             let frame_stamp = FrameStamp {
                                 monotonic_stamp_ns: frame_info.boottime_timestamp_ns,
                                 local_stamp_ns: frame_info.unix_timestamp_ns,
-                                app_start_id: systime::get_app_start_id(),
+                                app_start_id: normfs_time::app_start_id(),
                                 index: frame_info.sequence as u64,
                             };
 
