@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { setPwmOutputSteeringAngle, PWM_OUTPUT_DEFAULT_CHANNEL, PWM_OUTPUT_STEERING_CENTER_DEG } from '@/devices/pwm-output/commands';
-import { setVescTrampaRpm } from '@/devices/vesc-trampa/commands';
+import { setVescTrampaRpm, VESC_TRAMPA_DEFAULT_RPM_DURATION_MS } from '@/devices/vesc-trampa/commands';
 import { ROVER_DEFAULT_RPM_LIMIT, ROVER_MAX_RPM_LIMIT, ROVER_MIN_DRIVE_RPM, mapRoverControlInput, normalizeSquareJoystickInput } from './control-input';
 
 const IDLE = { rpm: 0, steeringDeg: PWM_OUTPUT_STEERING_CENTER_DEG };
 const ZERO_AXES = { x: 0, y: 0 };
-const COMMAND_DURATION_MS = 250;
-const SEND_INTERVAL_MS = 50;
+const COMMAND_DURATION_MS = VESC_TRAMPA_DEFAULT_RPM_DURATION_MS;
+// Keep overlap for LTE delay while limiting movement traffic to two updates/s.
+const SEND_INTERVAL_MS = 500;
+function isIdle(target: typeof IDLE) { return target.rpm === 0 && target.steeringDeg === IDLE.steeringDeg; }
 
 interface UseRoverControlSessionOptions {
   boardUuid: Uint8Array;
@@ -37,14 +39,27 @@ export function useRoverControlSession({ boardUuid, steeringOutputId, suspended 
     let disposed = false;
     let issued = false;
     let interval: number | null = null;
-    const clearLoop = () => { if (interval !== null) window.clearInterval(interval); interval = null; };
+    let flushTimer: number | null = null;
+    let lastMovementSentAt = -Infinity;
+    const clearFlushTimer = () => { if (flushTimer !== null) window.clearTimeout(flushTimer); flushTimer = null; };
+    const clearLoop = () => { if (interval !== null) window.clearInterval(interval); interval = null; clearFlushTimer(); };
     async function flush() {
       if (sending) return;
       sending = true;
       try {
         while (pending) {
+          const wait = SEND_INTERVAL_MS - (Date.now() - lastMovementSentAt);
+          if (!isIdle(pending) && wait > 0) {
+            if (flushTimer === null) flushTimer = window.setTimeout(() => {
+              flushTimer = null;
+              void flush();
+            }, wait);
+            break;
+          }
+          clearFlushTimer();
           const target = pending;
           pending = null;
+          lastMovementSentAt = isIdle(target) ? -Infinity : Date.now();
           try {
             // Preserve command ordering; later input occupies only the pending slot.
             // eslint-disable-next-line no-await-in-loop

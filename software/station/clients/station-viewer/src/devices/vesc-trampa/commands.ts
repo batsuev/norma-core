@@ -5,6 +5,9 @@ export const VESC_TRAMPA_CURRENT_MIN_A = -15;
 export const VESC_TRAMPA_CURRENT_MAX_A = 15;
 export const VESC_TRAMPA_CURRENT_HARD_LIMIT_A = 40;
 export const VESC_TRAMPA_CURRENT_STEP_A = 0.1;
+export const VESC_TRAMPA_MIN_DRIVE_RPM = 900;
+export const VESC_TRAMPA_MAX_RPM = 5500;
+export const VESC_TRAMPA_DEFAULT_RPM_DURATION_MS = 2000;
 
 const COMMAND_SET_CURRENT = 6;
 
@@ -80,10 +83,13 @@ export async function holdVescTrampaMotor(boardUuid: Uint8Array): Promise<void> 
 export async function setVescTrampaRpm(
   boardUuid: Uint8Array,
   rpm: number,
-  durationMs = 250,
+  durationMs = VESC_TRAMPA_DEFAULT_RPM_DURATION_MS,
 ): Promise<void> {
   if (!Number.isFinite(rpm) || !Number.isFinite(durationMs)) throw new Error('Invalid RPM command');
-  const target = Math.round(Math.max(-10_000, Math.min(10_000, rpm)));
+  if (rpm !== 0 && Math.abs(rpm) < VESC_TRAMPA_MIN_DRIVE_RPM) {
+    throw new Error(`Nonzero RPM magnitude must be at least ${VESC_TRAMPA_MIN_DRIVE_RPM}`);
+  }
+  const target = Math.round(Math.max(-VESC_TRAMPA_MAX_RPM, Math.min(VESC_TRAMPA_MAX_RPM, rpm)));
   const duration = target === 0 ? 0 : Math.max(1, Math.min(2500, Math.floor(durationMs)));
   await commandManager.sendVescTrampaCommand({
     targetBoardUuid: boardUuid,
