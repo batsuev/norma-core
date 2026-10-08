@@ -4,6 +4,8 @@ The Cockpit layout replaces the old VESC/PWM dashboard. It retains Station's sha
 
 ## Commands
 
+- The eye button hides or shows the local video display. Hiding unmounts the cockpit viewer and pauses its frame fetching; showing it resumes fetching. No camera command is sent, so capture and streaming on the rover continue. A frame request already in flight may still finish. Camera format selection is independent; **Stop stream** explicitly stops capture.
+
 - Drive sends signed VESC `COMM_SET_RPM` (8), exactly as station-pi: forward is negative. The slider controls both pointer and WASD input, initially 4500, selectable range 900–10,000 (matching station-pi’s limit). The rover’s VESC configuration has `s_pid_min_erpm = 900`: active joystick travel maps from 900 to the selected cap in either direction, while the center dead zone and release send exactly zero. This avoids requests below the controller’s speed-mode threshold. These are requested electrical RPM, not measured ground speed.
 - While input is held, the latest target is refreshed every 50 ms. Each drive request has a 250 ms duration followed by zero RPM. Pending sends are coalesced; release replaces pending movement with zero. Navigation intent (before lazy route loading), blur, page hide, unmount, target changes, unavailable telemetry and opening settings end driving input. Release is also handled on pointer cancellation or lost capture.
 - Steering stays on output `steering`, channel 7, using the existing calibrated 50–130° range. A finite PWM command covers the drive lease; release requests center. The destination is fixed; commands need no PWM status reads.
