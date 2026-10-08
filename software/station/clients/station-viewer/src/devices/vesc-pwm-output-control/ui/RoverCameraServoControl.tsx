@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { CAMERA_MAX_DEG, CAMERA_MIN_DEG, clampCameraAngle, setCameraAngle } from '../camera-servo';
+import { CAMERA_MAX_DEG, CAMERA_MIN_DEG, CAMERA_STEP_DEG, CAMERA_STEP_DELAY_MS, clampCameraAngle, getLastCameraAngle, getLastCameraCommandAt, getPendingCameraCommand, setCameraAngle } from '../camera-servo';
 interface RoverCameraServoControlProps {
   expanded: boolean;
   onToggle: () => void;
@@ -7,46 +7,75 @@ interface RoverCameraServoControlProps {
 }
 export default function RoverCameraServoControl({ expanded, onToggle, disabled }: RoverCameraServoControlProps) {
   const id = useId();
-  const [angle, setAngle] = useState(0);
+  const [angle, setAngle] = useState(getLastCameraAngle);
   const [sentAngle, setSentAngle] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const sending = useRef(false);
   const pending = useRef<number | null>(null);
-  const lastSent = useRef<number | null>(null);
+  const lastSent = useRef(getLastCameraAngle());
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mounted = useRef(false);
   const enabled = useRef(!disabled);
+  function cancelPending() {
+    pending.current = null;
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  }
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; pending.current = null; };
+    return () => { mounted.current = false; cancelPending(); };
   }, []);
   useEffect(() => {
     enabled.current = !disabled;
-    if (disabled) pending.current = null;
+    if (disabled) { cancelPending(); setBusy(false); setAngle(lastSent.current); }
   }, [disabled]);
   async function flush() {
-    if (sending.current) return;
+    if (sending.current || timer.current !== null || !mounted.current || !enabled.current || pending.current === null) return;
+    const previousCommand = getPendingCameraCommand();
+    if (previousCommand) {
+      // A prior cockpit can unmount while its command is still in flight.
+      sending.current = true; setBusy(true);
+      try {
+        await previousCommand;
+      } catch (cause) {
+        cancelPending();
+        if (mounted.current) { setError(cause instanceof Error ? cause.message : 'Camera command failed'); setBusy(false); }
+      } finally {
+        sending.current = false;
+      }
+      void flush();
+      return;
+    }
+    lastSent.current = getLastCameraAngle();
+    const wait = CAMERA_STEP_DELAY_MS - (Date.now() - getLastCameraCommandAt());
+    if (wait > 0) {
+      timer.current = setTimeout(() => { timer.current = null; void flush(); }, wait);
+      return;
+    }
+    const remaining = pending.current - lastSent.current;
+    if (remaining === 0) { pending.current = null; setBusy(false); return; }
+    const target = lastSent.current + Math.sign(remaining) * CAMERA_STEP_DEG;
     sending.current = true; setBusy(true);
     try {
-      // One write in flight, one replaceable target. A slow connection must not
-      // replay obsolete angles after the user has finished dragging.
-      while (mounted.current && enabled.current && pending.current !== null) {
-        const target = pending.current;
-        pending.current = null;
-        if (target === lastSent.current) continue;
-        try {
-          // eslint-disable-next-line no-await-in-loop -- servo writes must stay ordered with only the latest target pending
-          await setCameraAngle(target);
-          if (mounted.current) {
-            lastSent.current = target; setSentAngle(target); setError('');
-          }
-        } catch (cause) {
-          if (mounted.current) setError(cause instanceof Error ? cause.message : 'Camera command failed');
-        }
+      // Coalesce targets, never intermediate steps. Wait after acknowledgement
+      // so a slow connection cannot release a burst of queued motion commands.
+      await setCameraAngle(target);
+      lastSent.current = target;
+      if (mounted.current) {
+        setSentAngle(target); setError('');
+        if (!enabled.current) setAngle(target);
+        if (pending.current === target) { pending.current = null; setBusy(false); }
+        if (enabled.current) timer.current = setTimeout(() => {
+          timer.current = null;
+          void flush();
+        }, CAMERA_STEP_DELAY_MS);
       }
+    } catch (cause) {
+      cancelPending();
+      if (mounted.current) { setError(cause instanceof Error ? cause.message : 'Camera command failed'); setBusy(false); setAngle(lastSent.current); }
     } finally {
       sending.current = false;
-      if (mounted.current) setBusy(false);
     }
   }
   function move(value: number) {
@@ -64,7 +93,7 @@ export default function RoverCameraServoControl({ expanded, onToggle, disabled }
     <div id={id} className="rover-setting-content">
       <div className="rover-panel-heading"><span>Camera</span><output>{displayAngle}</output></div>
       <div className="rover-angle-line"><span>Under wheels</span><span>Rear</span></div>
-      <input aria-label="Camera angle" aria-valuetext={`${angle} degrees target`} type="range" min={CAMERA_MIN_DEG} max={CAMERA_MAX_DEG} step={1}
+      <input aria-label="Camera angle" aria-valuetext={`${angle} degrees target`} type="range" min={CAMERA_MIN_DEG} max={CAMERA_MAX_DEG} step={CAMERA_STEP_DEG}
         value={angle} disabled={disabled}
         onChange={event => move(event.currentTarget.valueAsNumber)}
         onPointerDown={event => event.currentTarget.setPointerCapture(event.pointerId)} />
