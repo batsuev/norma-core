@@ -4,6 +4,8 @@ import ArduinoNiclaSenseEnvExpanded from '@/components/history/ArduinoNiclaSense
 import ArduinoNiclaSenseMeExpanded from '@/components/history/ArduinoNiclaSenseMeExpanded';
 import Ina226Expanded from '@/components/history/Ina226Expanded';
 import VictronSmartSolarExpanded from '@/components/history/VictronSmartSolarExpanded';
+import VescTrampaExpanded from '@/components/history/VescTrampaExpanded';
+import { parseVescTrampaValuesPayload } from '@/devices/vesc-trampa/values-parser';
 import { airGradientDeviceLabel, airGradientLineText, readAirGradientValues } from '@/devices/airgradient-open-air-o-1pst/values';
 import { createCroppedHikmicroJson, createCroppedJson } from '@/components/history/history-utils';
 import RawBytesExpanded from '@/components/history/RawBytesExpanded';
@@ -94,14 +96,15 @@ function getAvailableTabs(
   const isVictronSmartSolar = type === 'victron-smartsolar-mppt' && data instanceof victron_smartsolar_mppt.RxEnvelope;
   const isYahboomDogzillaLite = type === 'yahboom_dogzilla_lite' && data instanceof yahboom_dogzilla_lite.InferenceState;
   const isNormvla = type === 'normvla' && data instanceof normvla.Frame;
-  const isVescTrampa = type === 'vesc-trampa-rx' && data instanceof vesc_trampa.RxEnvelope;
+  const isVescTrampa = (type === 'vesc-trampa-rx' && data instanceof vesc_trampa.RxEnvelope)
+    || (type === 'vesc-trampa' && data instanceof vesc_trampa.InferenceState);
 
   if (isUsbVideo || isUsbVideoTx || isHikmicroThermal || isSt3215 || isSt3215Tx || isMirroring || isVescTrampaTx || isSysinfo || isArduinoNiclaSenseEnv || isArduinoNiclaSenseMe || isIna226 || isAirGradient || isVictronSmartSolar || isYahboomDogzillaLite || isNormvla) {
     return ['visual', 'json', 'raw'];
   }
 
   if (isVescTrampa) {
-    return ['json', 'raw'];
+    return ['visual', 'json', 'raw'];
   }
 
   return ['json', 'raw'];
@@ -154,6 +157,10 @@ export default function ExpandedView({ data, type, rawData, queueId, entryId }: 
   const rawPayload = rawData ?? (data instanceof Uint8Array ? data : null);
 
   const renderVisual = () => {
+    if ((type === 'vesc-trampa' && data instanceof vesc_trampa.InferenceState)
+      || (type === 'vesc-trampa-rx' && data instanceof vesc_trampa.RxEnvelope)) {
+      return <VescTrampaExpanded data={data} />;
+    }
     if (type === 'usbvideo' && data instanceof usbvideo.RxEnvelope) {
       return <UsbVideoExpanded data={data} onImageClick={(src, alt) => setFullscreenImage({ src, alt })} />;
     }
@@ -541,17 +548,27 @@ export default function ExpandedView({ data, type, rawData, queueId, entryId }: 
         </div>
       );
     }
-    if (type === 'vesc-trampa-rx' && data instanceof vesc_trampa.RxEnvelope) {
-      const vescData = vesc_trampa.RxEnvelope.toObject(data, {
+    if ((type === 'vesc-trampa' && data instanceof vesc_trampa.InferenceState)
+      || (type === 'vesc-trampa-rx' && data instanceof vesc_trampa.RxEnvelope)) {
+      const options = {
         longs: String,
         enums: String,
         bytes: String,
         defaults: true
-      });
+      };
+      const vescData = data instanceof vesc_trampa.InferenceState
+        ? { ...vesc_trampa.InferenceState.toObject(data, options), boards: data.boards.map(board => ({
+          ...vesc_trampa.InferenceState.BoardState.toObject(vesc_trampa.InferenceState.BoardState.create(board), options),
+          decodedValues: parseVescTrampaValuesPayload(board.valuesPayload),
+        })) }
+        : { ...vesc_trampa.RxEnvelope.toObject(data, options),
+          ...([4, 50].includes(data.boardPacket?.payload?.[0] ?? -1)
+            ? { decodedValues: parseVescTrampaValuesPayload(data.boardPacket?.payload) } : {}),
+        };
 
       return (
         <div>
-          <div className="text-xs text-text-label mb-1">VESC Trampa RxEnvelope JSON:</div>
+          <div className="text-xs text-text-label mb-1">VESC Trampa {data instanceof vesc_trampa.InferenceState ? 'InferenceState' : 'RxEnvelope'} JSON:</div>
           <div className="bg-surface-primary p-2 rounded text-xs font-mono text-accent-data overflow-x-auto max-h-64 overflow-y-auto">
             <pre>{JSON.stringify(vescData, null, 2)}</pre>
           </div>

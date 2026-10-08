@@ -26,3 +26,7 @@ The compass rotates the sensor's forward (+Y) axis into Bosch's East/North/Up re
 ## Validation
 
 Regression tests cover pre-fetch queue filtering versus History, IMU throttling and pointer caching, sensor validity, finite RPM commands, release during a slow send, keyboard RPM limits, suspension/unmount, drive-target handoff, navigation/key-repeat rearming, and steering commands without PWM status. Browser checks use a simulated NormFS transport, so they do not move real hardware.
+
+## VESC History
+
+VESC inference records and received values packets have a read-only Visual tab with FET, motor and MOSFET temperatures, RPM, currents, voltage, duty, energy counters, tachometers, PID position, controller ID and fault/status flags. Missing selective fields show a dash; malformed payloads show an error. JSON includes decoded values alongside the complete recorded envelope, and Hex retains the original bytes.
