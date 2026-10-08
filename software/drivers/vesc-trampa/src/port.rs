@@ -25,6 +25,8 @@ pub const VESC_TRAMPA_TICK_INTERVAL_MS: u64 = 10;
 pub const VESC_TRAMPA_HOLD_HANDBRAKE_CURRENT_A: f32 = 10.0;
 const VESC_TRAMPA_SET_CURRENT_COMMAND_ID: u8 = 6;
 const VESC_TRAMPA_SET_RPM_COMMAND_ID: u8 = 8;
+const VESC_TRAMPA_MIN_DRIVE_RPM: u32 = 900;
+const VESC_TRAMPA_MAX_RPM: u32 = 5500;
 
 #[derive(Debug, Clone)]
 struct ActiveBoardCommand {
@@ -603,10 +605,16 @@ impl VescTrampaPort {
             {
                 return Err("non-zero current requires duration_ms");
             }
-            if command.duration_ms == 0
-                && Self::set_rpm_payload_rpm(&command.payload).is_some_and(|rpm| rpm != 0)
-            {
-                return Err("non-zero rpm requires duration_ms");
+            if let Some(rpm) = Self::set_rpm_payload_rpm(&command.payload) {
+                if rpm != 0 && command.duration_ms == 0 {
+                    return Err("non-zero rpm requires duration_ms");
+                }
+                if rpm != 0
+                    && !(VESC_TRAMPA_MIN_DRIVE_RPM..=VESC_TRAMPA_MAX_RPM)
+                        .contains(&rpm.unsigned_abs())
+                {
+                    return Err("rpm must be zero or have magnitude between 900 and 5500");
+                }
             }
         }
         Ok(())
@@ -617,6 +625,9 @@ impl VescTrampaPort {
     ) -> Result<(), &'static str> {
         if command.payload.is_empty() {
             return Err("empty payload");
+        }
+        if command.payload[0] == VESC_TRAMPA_SET_RPM_COMMAND_ID && command.payload.len() != 5 {
+            return Err("set rpm payload must be exactly 5 bytes");
         }
         Ok(())
     }
@@ -1066,6 +1077,51 @@ mod tests {
             VescTrampaPort::validate_board_commands(&commands),
             Err("non-zero rpm requires duration_ms")
         );
+    }
+
+    #[test]
+    fn enforces_rpm_bounds_for_every_sequence_step() {
+        for rpm in [
+            i32::MIN, -10000, -5501, -5500, -900, -899, -1, 0, 1, 899, 900, 5500, 5501, 10000,
+            i32::MAX,
+        ] {
+            let mut payload = vec![8];
+            payload.extend_from_slice(&rpm.to_be_bytes());
+            let commands = vec![
+                VescTrampaBoardCommand {
+                    payload: Bytes::from_static(&[8, 0, 0, 3, 132]), // 900 RPM
+                    duration_ms: 100,
+                    ..Default::default()
+                },
+                VescTrampaBoardCommand {
+                    payload: Bytes::from(payload),
+                    duration_ms: 100,
+                    ..Default::default()
+                },
+                VescTrampaBoardCommand {
+                    payload: Bytes::from_static(&[8, 0, 0, 0, 0]),
+                    ..Default::default()
+                },
+            ];
+            let valid = rpm == 0 || (900..=5500).contains(&rpm) || (-5500..=-900).contains(&rpm);
+            assert_eq!(
+                VescTrampaPort::validate_board_commands(&commands).is_ok(),
+                valid,
+                "RPM {rpm}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_rpm_payloads() {
+        for payload in [vec![8], vec![8, 0, 0, 3], vec![8, 0, 0, 3, 132, 0]] {
+            let commands = vec![VescTrampaBoardCommand {
+                payload: Bytes::from(payload),
+                duration_ms: 100,
+                ..Default::default()
+            }];
+            assert!(VescTrampaPort::validate_board_commands(&commands).is_err());
+        }
     }
 
     #[test]
