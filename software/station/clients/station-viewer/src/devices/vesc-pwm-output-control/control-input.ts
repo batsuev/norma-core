@@ -2,12 +2,13 @@ import {
   PWM_OUTPUT_STEERING_CENTER_DEG,
   PWM_OUTPUT_STEERING_RANGE_DEG,
 } from '@/devices/pwm-output/commands';
+import { VESC_TRAMPA_MAX_RPM, VESC_TRAMPA_MIN_DRIVE_RPM } from '@/devices/vesc-trampa/commands';
 
 // Requested electrical RPM, matching station-pi (not wheel RPM / ground speed).
 // rover-alpha VESC motor configuration: s_pid_min_erpm = 900.
-export const ROVER_MIN_DRIVE_RPM = 900;
+export const ROVER_MIN_DRIVE_RPM = VESC_TRAMPA_MIN_DRIVE_RPM;
 export const ROVER_DEFAULT_RPM_LIMIT = 4500;
-export const ROVER_MAX_RPM_LIMIT = 10_000;
+export const ROVER_MAX_RPM_LIMIT = VESC_TRAMPA_MAX_RPM;
 
 export interface RoverControlTarget {
   rpm: number;

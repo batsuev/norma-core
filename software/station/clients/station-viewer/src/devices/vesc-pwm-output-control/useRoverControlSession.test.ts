@@ -2,11 +2,12 @@
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { commands, drivers, vesc_trampa } from '@/api/proto.js';
+import { commands, drivers, pwm_output, vesc_trampa } from '@/api/proto.js';
 import type { RoverControlSession } from './useRoverControlSession';
 
 let session: RoverControlSession;
 let written: vesc_trampa.Command[];
+let steeringWritten: pwm_output.Command[];
 let root: ReturnType<typeof createRoot>;
 let element: HTMLDivElement;
 let releaseFirst: (() => void) | undefined;
@@ -20,11 +21,12 @@ function rpm(c: vesc_trampa.Command) { const p = c.boardCommands[0].payload!; re
 beforeEach(async () => {
   vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
   vi.stubGlobal('WebSocket',class { close() {} });
-  written=[]; blockFirst=false; releaseFirst=undefined;
+  written=[]; steeringWritten=[]; blockFirst=false; releaseFirst=undefined;
   const { default: manager } = await import('@/api/websocket');
   vi.spyOn(manager.normFs,'enqueuePack').mockImplementation(async (_queue,packets) => {
     let blocked=false;
     for(const packet of packets) for(const cmd of commands.StationCommandsPack.decode(packet).commands) {
+      if(cmd.type===drivers.StationCommandType.STC_PWM_OUTPUT_COMMAND) steeringWritten.push(pwm_output.Command.decode(cmd.body!));
       if(cmd.type===drivers.StationCommandType.STC_VESC_TRAMPA_COMMAND) {
         written.push(vesc_trampa.Command.decode(cmd.body!));
         blocked ||= blockFirst && written.length===1;
@@ -41,22 +43,41 @@ afterEach(async()=>{await act(async()=>root.unmount());element.remove();vi.useRe
 it('sends bounded RPM leases and coalesces a release ahead of queued driving while transport is slow',async()=>{
   blockFirst=true;
   await act(async()=>{session.actions.startTouch();session.actions.setTouchInput(0,-1);});
-  await act(async()=>vi.advanceTimersByTimeAsync(150));
+  await act(async()=>vi.advanceTimersByTimeAsync(1200));
   await act(async()=>session.actions.releaseTouch());
   await act(async()=>releaseFirst?.());
   expect(written.map(rpm)).toEqual([-4500,0]);
   expect(written[0].boardCommands[0].payload![0]).toBe(8);
-  expect(written[0].boardCommands[0].durationMs).toBeGreaterThan(0);
-  expect(written[0].boardCommands[0].durationMs).toBeLessThanOrEqual(500);
+  expect(written[0].boardCommands[0].durationMs).toBe(2000);
+  const wave = steeringWritten[0].wave!;
+  expect(wave.repeat! * wave.segments!.reduce((total, segment) => total + segment.durationUs!, 0)).toBe(2_000_000);
+  expect(written[1].boardCommands[0].durationMs).toBe(0);
   const tail=written[0].boardCommands[1].payload!;
   expect(new DataView(tail.buffer,tail.byteOffset,tail.byteLength).getInt32(1,false)).toBe(0);
   await act(async()=>vi.advanceTimersByTimeAsync(500));
   expect(written.map(rpm)).toEqual([-4500,0]);
 });
+it('coalesces rapid joystick changes into LTE-paced updates while release bypasses the send interval', async () => {
+  await act(async () => { session.actions.startTouch(); session.actions.setTouchInput(0, -1); });
+  await act(async () => vi.advanceTimersByTimeAsync(100));
+  await act(async () => session.actions.setTouchInput(.5, -.5));
+  await act(async () => session.actions.setTouchInput(1, 1));
+  expect(session.state.rpm).toBe(4500);
+  await act(async () => vi.advanceTimersByTimeAsync(399));
+  expect(written.map(rpm)).toEqual([-4500]);
+  await act(async () => vi.advanceTimersByTimeAsync(1));
+  expect(written.map(rpm)).toEqual([-4500, 4500]);
+  await act(async () => vi.advanceTimersByTimeAsync(10));
+  await act(async () => session.actions.releaseTouch());
+  expect(written.map(rpm)).toEqual([-4500, 4500, 0]);
+  await act(async () => vi.advanceTimersByTimeAsync(3000));
+  expect(written.map(rpm)).toEqual([-4500, 4500, 0]);
+});
 it('uses the RPM slider for keyboard driving and releases on blur, suspension and unmount',async()=>{
-  await act(async()=>session.actions.setRpmLimit(5000));
+  await act(async()=>session.actions.setRpmLimit(10000));
+  expect(session.state.rpmLimit).toBe(5500);
   await act(async()=>window.dispatchEvent(new KeyboardEvent('keydown',{code:'KeyW'})));
-  expect(rpm(written.at(-1)!)).toBe(-5000);
+  expect(rpm(written.at(-1)!)).toBe(-5500);
   await act(async()=>window.dispatchEvent(new Event('blur')));
   expect(rpm(written.at(-1)!)).toBe(0);
   await act(async()=>{session.actions.startTouch();session.actions.setTouchInput(1,1);});
@@ -99,7 +120,7 @@ it('keeps nonzero joystick requests above the rover speed-controller minimum whi
   await act(async () => session.actions.setRpmLimit(1100));
   for (const y of [-1, -.5, -.13, 0, .11, .13, .5, 1]) {
     // eslint-disable-next-line no-await-in-loop -- exercise successive joystick positions in one control session
-    await act(async () => { session.actions.startTouch(); session.actions.setTouchInput(0, y); });
+    await act(async () => { session.actions.startTouch(); session.actions.setTouchInput(0, y); await vi.advanceTimersByTimeAsync(500); });
     const target = rpm(written.at(-1)!);
     if (Math.abs(y) <= .12) expect(target).toBe(0);
     else {
